@@ -317,3 +317,87 @@
     (as-contract (stx-transfer? rewards (as-contract tx-sender) (get owner token)))
   )
 )
+
+;; READ-ONLY FUNCTIONS
+
+;; Get token information
+(define-read-only (get-token-info (token-id uint))
+  (map-get? tokens { token-id: token-id })
+)
+
+;; Get marketplace listing
+(define-read-only (get-listing (token-id uint))
+  (map-get? token-listings { token-id: token-id })
+)
+
+;; Get fractional ownership shares
+(define-read-only (get-fractional-shares
+    (token-id uint)
+    (owner principal)
+  )
+  (map-get? fractional-ownership {
+    token-id: token-id,
+    owner: owner,
+  })
+)
+
+;; Get staking rewards information
+(define-read-only (get-staking-rewards (token-id uint))
+  (map-get? staking-rewards { token-id: token-id })
+)
+
+;; Calculate accumulated staking rewards
+(define-read-only (calculate-rewards (token-id uint))
+  (let (
+      (token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN))
+      (rewards (unwrap! (get-staking-rewards token-id) ERR-NOT-STAKED))
+      (blocks-staked (- stacks-block-height (get stake-timestamp token)))
+      (yield-per-block (/ (var-get yield-rate) u52560)) ;; Approximate blocks per year
+      (new-rewards (* blocks-staked yield-per-block))
+    )
+    (ok (+ (get accumulated-yield rewards) new-rewards))
+  )
+)
+
+;; Get protocol statistics
+(define-read-only (get-protocol-stats)
+  {
+    total-supply: (var-get total-supply),
+    total-staked: (var-get total-staked),
+    protocol-fee: (var-get protocol-fee),
+    yield-rate: (var-get yield-rate),
+    min-collateral-ratio: (var-get min-collateral-ratio),
+  }
+)
+
+;; ADMIN FUNCTIONS (Owner Only)
+
+;; Update protocol fee (owner only)
+(define-public (set-protocol-fee (new-fee uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (<= new-fee u1000) ERR-INVALID-PERCENTAGE) ;; Max 10%
+    (var-set protocol-fee new-fee)
+    (ok true)
+  )
+)
+
+;; Update yield rate (owner only)
+(define-public (set-yield-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (<= new-rate u2000) ERR-INVALID-PERCENTAGE) ;; Max 20%
+    (var-set yield-rate new-rate)
+    (ok true)
+  )
+)
+
+;; Update minimum collateral ratio (owner only)
+(define-public (set-min-collateral-ratio (new-ratio uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-OWNER-ONLY)
+    (asserts! (>= new-ratio u100) ERR-INVALID-PERCENTAGE) ;; Min 100%
+    (var-set min-collateral-ratio new-ratio)
+    (ok true)
+  )
+)
