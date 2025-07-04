@@ -209,3 +209,111 @@
     (ok true)
   )
 )
+
+;; FRACTIONAL OWNERSHIP FUNCTIONS
+
+;; Transfer fractional shares
+(define-public (transfer-shares
+    (token-id uint)
+    (recipient principal)
+    (share-amount uint)
+  )
+  (let (
+      (sender-shares (unwrap! (get-fractional-shares token-id tx-sender)
+        ERR-INSUFFICIENT-BALANCE
+      ))
+      (current-recipient-shares (default-to { shares: u0 } (get-fractional-shares token-id recipient)))
+      (recipient-new-shares (unwrap! (safe-add (get shares current-recipient-shares) share-amount)
+        ERR-OVERFLOW
+      ))
+    )
+    ;; Validation
+    (asserts! (validate-recipient recipient) ERR-INVALID-RECIPIENT)
+    (asserts! (>= (get shares sender-shares) share-amount)
+      ERR-INSUFFICIENT-BALANCE
+    )
+    ;; Update sender's shares
+    (map-set fractional-ownership {
+      token-id: token-id,
+      owner: tx-sender,
+    } { shares: (- (get shares sender-shares) share-amount) }
+    )
+    ;; Update recipient's shares
+    (map-set fractional-ownership {
+      token-id: token-id,
+      owner: recipient,
+    } { shares: recipient-new-shares }
+    )
+    (ok true)
+  )
+)
+
+;; STAKING FUNCTIONS
+
+;; Stake NFT for yield generation
+(define-public (stake-nft (token-id uint))
+  (let ((token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN)))
+    ;; Validation
+    (asserts! (is-eq tx-sender (get owner token)) ERR-NOT-TOKEN-OWNER)
+    (asserts! (not (get is-staked token)) ERR-ALREADY-STAKED)
+    ;; Update token staking status
+    (map-set tokens { token-id: token-id }
+      (merge token {
+        is-staked: true,
+        stake-timestamp: stacks-block-height,
+      })
+    )
+    ;; Initialize staking rewards
+    (map-set staking-rewards { token-id: token-id } {
+      accumulated-yield: u0,
+      last-claim: stacks-block-height,
+    })
+    ;; Update total staked counter
+    (var-set total-staked (+ (var-get total-staked) u1))
+    (ok true)
+  )
+)
+
+;; Unstake NFT and claim final rewards
+(define-public (unstake-nft (token-id uint))
+  (let (
+      (token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN))
+      (rewards (unwrap! (get-staking-rewards token-id) ERR-NOT-STAKED))
+    )
+    ;; Validation
+    (asserts! (is-eq tx-sender (get owner token)) ERR-NOT-TOKEN-OWNER)
+    (asserts! (get is-staked token) ERR-NOT-STAKED)
+    ;; Claim final rewards
+    (try! (claim-staking-rewards token-id))
+    ;; Update token staking status
+    (map-set tokens { token-id: token-id }
+      (merge token {
+        is-staked: false,
+        stake-timestamp: u0,
+      })
+    )
+    ;; Update total staked counter
+    (var-set total-staked (- (var-get total-staked) u1))
+    (ok true)
+  )
+)
+
+;; STAKING REWARDS FUNCTIONS
+
+;; Internal function to claim staking rewards
+(define-private (claim-staking-rewards (token-id uint))
+  (let (
+      (rewards (unwrap! (calculate-rewards token-id) ERR-NOT-STAKED))
+      (token (unwrap! (get-token-info token-id) ERR-INVALID-TOKEN))
+    )
+    ;; Ensure token is staked
+    (asserts! (get is-staked token) ERR-NOT-STAKED)
+    ;; Reset rewards accumulation
+    (map-set staking-rewards { token-id: token-id } {
+      accumulated-yield: u0,
+      last-claim: stacks-block-height,
+    })
+    ;; Transfer rewards to token owner
+    (as-contract (stx-transfer? rewards (as-contract tx-sender) (get owner token)))
+  )
+)
